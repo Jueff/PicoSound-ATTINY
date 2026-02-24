@@ -18,18 +18,17 @@
 const uint NUM_LEDS_TO_EMULATE = 2;
 const uint NUM_LEDS_TO_SKIP = NUM_LEDS_TO_EMULATE-1;
 
-const uint DEFAULT_RECONNECT_CYCLES = 2;
-
 const char* bootMessage = "MobaLedLib Pico Sound V0.02";
 
-#include "WS281xProcessor.h"
+#include "LEDReceiver.h"
 
 #define MP3_DEBUG
 #define S_DEBUG
 
 bool on = true;
-WS281xProcessor* pWs281xProcessor = NULL;
+bool dataChanged = false;
 CLEDController* pController0;
+LEDReceiver* pLEDReceiver;
 #define NUM_LEDS 20  
 CRGB leds[NUM_LEDS];           // Define the array of leds
 
@@ -38,15 +37,11 @@ unsigned long lastSec = millis();
 unsigned long lastDebug = millis();
 
 bool isOnline = false;
-uint8_t reconnectCycles = DEFAULT_RECONNECT_CYCLES;
+uint8_t lastSignal = 0xff;
 
 volatile bool dataAvailable = false;
-volatile bool dataChanged = false;
-volatile bool errorDetected  = false;
-int blinkSleep = 1000;
 
 uint8_t ledData[NUM_LEDS_TO_EMULATE*3];
-uint8_t ledDataPrevious[NUM_LEDS_TO_EMULATE*3];
 uint8_t previousCommand[NUM_LEDS_TO_EMULATE];
 uint8_t activeModule[NUM_LEDS_TO_EMULATE];
 
@@ -73,34 +68,62 @@ DFPlayerMini MP3[MAX_CHANNEL];
 #define MAX_BRIGHT 20
 MobaLedLib_Configuration()
 {
-  Switchable_RGB_Heartbeat_Color(0, HB_INPUT, 20, 70, 170, 1000)
-  Blink3(0, C_RED, HB_INPUT+1, 0.5 Sek, 0.5 Sek, 5, MAX_BRIGHT, 0)
-  Blink3(0, C_YELLOW, HB_INPUT + 2, 0.5 Sek, 0.5 Sek, 5, MAX_BRIGHT, 0)
-  Blink3(0, C_BLUE, HB_INPUT + 3, 0.5 Sek, 0.5 Sek, 5, MAX_BRIGHT, 0)
+  BlueLight1(0, C3, HB_INPUT + 2)
+  //Blink3(0, C_BLUE,                 HB_INPUT + 2, 0.5 Sek, 0.5 Sek, 5, MAX_BRIGHT, 0)
+  Blink3(0, C_YELLOW,               HB_INPUT + 1, 0.5 Sek, 0.5 Sek, 5, MAX_BRIGHT, 0)
+  Blink3(0, C_RED,                  HB_INPUT + 0, 0.5 Sek, 0.5 Sek, 5, MAX_BRIGHT, 0)
+  Switchable_RGB_Heartbeat_Color(0, HB_INPUT + 3, 20, 70, 128, 1000)
+  BlueLight1(1, C3, HB_INPUT + 2)
+  Blink3(1, C_YELLOW, HB_INPUT + 1, 0.5 Sek, 0.5 Sek, 5, MAX_BRIGHT, 0)
+  Blink3(1, C_RED, HB_INPUT + 0, 0.5 Sek, 0.5 Sek, 5, MAX_BRIGHT, 0)
+  Switchable_RGB_Heartbeat_Color(1, HB_INPUT + 3, 20, 70, 128, 1000)
+    BlueLight1(2, C3, HB_INPUT + 2)
+    Blink3(2, C_YELLOW, HB_INPUT + 1, 0.5 Sek, 0.5 Sek, 5, MAX_BRIGHT, 0)
+    Blink3(2, C_RED, HB_INPUT + 0, 0.5 Sek, 0.5 Sek, 5, MAX_BRIGHT, 0)
+    Switchable_RGB_Heartbeat_Color(2, HB_INPUT + 3, 20, 70, 128, 1000)
 
-  
-  //BlueLight1(0, C3, HB_INPUT + 1)
+
 
   EndCfg // End of the configuration
 };
 
 MobaLedLib_Create(leds); // Define the MobaLedLib instance
 
-void setSignal(uint8_t signal)
+void setSignal(LEDReceiver::Status signal)
 {
-  if (signal > 3) return;
-  MobaLedLib.Set_Input(HB_INPUT, 0);
-  MobaLedLib.Set_Input(HB_INPUT + 1, 0);
-  MobaLedLib.Set_Input(HB_INPUT + 2, 0);
-  MobaLedLib.Set_Input(HB_INPUT + 3, 0);
-  MobaLedLib.Set_Input(HB_INPUT + signal, 1);
+  /*
+    Error       = 0,
+    DataMissing = 1,
+    Offline     = 2,
+    Online      = 3
+  */
+  uint8_t newSignal = (uint8_t)signal;
+  if (newSignal > 3) return;
+  if (newSignal == lastSignal) return;
+  lastSignal = newSignal;
+  Serial.printf("Set signal %d\r\n", newSignal);
+  for (int i = 0; i < 4; i++)
+  {
+    MobaLedLib.Set_Input(HB_INPUT + i, 0);
+  }
+  MobaLedLib.Update();
+  MobaLedLib.Set_Input(HB_INPUT + newSignal, 1);
+  /*
+  switch (signal)
+  {
+    case LEDReceiver::Status::Online:      MobaLedLib.Set_Input(HB_INPUT, 1);  break;
+    case LEDReceiver::Status::Offline:     MobaLedLib.Set_Input(HB_INPUT + 1, 1); break;
+    case LEDReceiver::Status::DataMissing: MobaLedLib.Set_Input(HB_INPUT + 2, 1); break;
+    default:
+    case LEDReceiver::Status::Error:       MobaLedLib.Set_Input(HB_INPUT + 3, 1); break;
+  }*/
 }
 
 void setup()
 {
     Serial.begin(115200);
     // only enable for debugging purpose to see trace output of boot code
-    //while (!Serial) {} 
+    while (!Serial) {} 
     Serial.println(bootMessage);
 
     for (int i=0;i<16;i++)
@@ -111,19 +134,20 @@ void setup()
     gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
 
     memset(previousCommand, sizeof(previousCommand), 0);
-    memset(ledDataPrevious, sizeof(ledDataPrevious), 0);
     for (uint8_t i=0; i<NUM_LEDS_TO_EMULATE; i++)
     {
       activeModule[i] = i*3;
     }
-    
-    pWs281xProcessor = new WS281xProcessor();
-    pWs281xProcessor->init(DATA_IN_PIN, SIDESET_PIN, DATA_OUT_PIN, NUM_LEDS_TO_EMULATE, NUM_LEDS_TO_SKIP, GRB, true);
-
+    Serial.println("Initialize LED Receiver");
+    pLEDReceiver = new LEDReceiver(&ledData[0], NUM_LEDS_TO_EMULATE, NUM_LEDS_TO_SKIP, DATA_IN_PIN, DATA_OUT_PIN);
+    Serial.println("Initialize FastLED"); 
+          
     FastLED.addLeds<NEOPIXEL, STATUSLED_PIN>(leds, NUM_LEDS); // Initialize the FastLED library
     FastLED.addLeds<NEOPIXEL, 16>(leds, NUM_LEDS); // Initialize the FastLED library
     FastLED.setDither(DISABLE_DITHER);       // avoid sending slightly modified brightness values
 
+    setSignal(LEDReceiver::Status::Offline);
+    Serial.println("Initialize core1");
     multicore_launch_core1(core1_entry);
 }
 
@@ -251,143 +275,11 @@ void core1_entry()
 
 void loop()
 {
-
-  auto lastDataMillis = millis() + 1000;   // at start wait 1secs
-  
-  int status = -1;
-  while (true) 
-  {
-    if (errorDetected)
-    {
-      Serial.println("*** errorDetected ***");
-      errorDetected = false;
-    }
-    if ((millis()-lastDataMillis)>50)
-    {
-      if (status!=1)
-      {
-        status = 1;
-        isOnline = false;
-        pWs281xProcessor->reset();
-        if (errorDetected)
-        {
-          setSignal(3);  // blink blue
-        }
-        else
-        {
-          setSignal(1);  // blink red
-        }
-      }
-    }
-    else if (pWs281xProcessor->notEnoughData())   // highest priority for status signaling
-    {
-      Serial.println("*** notEnoughData ***");
-      isOnline = false;
-      if (status!=0)
-      {
-        status = 0;
-        setSignal(2);  // blink yellow
-      }
-    }
+    pLEDReceiver->loop();
+    dataChanged = pLEDReceiver->hasDataChanged();
+    setSignal(pLEDReceiver->getStatus());
     MobaLedLib.Update();
     FastLED.show();                       // Show the LEDs (send the leds[] array to the LED stripe)
-    pWs281xProcessor->setRepeaterLEDColor(leds[0].r, leds[0].g, leds[0].b);
-
-    std::array<RGBLED,NUM_LEDS_TO_EMULATE> leds;
-    pWs281xProcessor->getLEDs(&leds[0]);
-    if (dataAvailable && ! errorDetected)
-    {
-      dataAvailable = false;
-      //Serial.println("+");
-      if (!isOnline) 
-      {
-        isOnline = true;
-        reconnectCycles = DEFAULT_RECONNECT_CYCLES;
-        lastDataMillis = millis() + 200;   // after reconnect wait 200msecs for next data
-      }
-      if (millis()>=lastDataMillis) 
-      {
-          lastDataMillis = millis();
-          updatesPerSec++;
-          //
-          uint8_t cnt = 0;
-          for (auto it = leds.begin(); it != leds.end(); it++) {
-            //Serial.printf("[%7u] LED %u: ", time_us_32() / 1000, std::distance(leds.begin(), it));
-            //print_led_state(*it, pWs2811Processor->getResetCnt());
-            ledData[cnt*3] = (*it).colors.r;
-            ledData[cnt*3+1] = (*it).colors.g;
-            ledData[cnt*3+2] = (*it).colors.b;
-            cnt++;
-          }
-          bool dataSame = memcmp(ledData, ledDataPrevious, sizeof(ledData))==0;
-          
-          if (reconnectCycles>0)
-          {
-              if (dataSame) 
-              {
-                  reconnectCycles--;
-                  dataSame = false;
-              }
-              else
-              {
-                  memcpy(ledDataPrevious, ledData, sizeof(ledData));
-                  reconnectCycles = DEFAULT_RECONNECT_CYCLES;       // data changed, start triggering again
-              }
-          }
-          if (reconnectCycles==0)
-          {
-              // connected, getting valid data
-              if (status!=2)
-              {
-                  status=2;
-                  setSignal(0);   // green heartbeat
-              }
-              if (!dataSame)
-              {
-                memcpy(ledDataPrevious, ledData, sizeof(ledData));
-                DebugOutputLedData();
-                dataChanged = true;
-              }
-          }
-       }
-    }
-    if ((millis()-lastSec)>=1000)
-    {
-      lastSec+=1000;
-      
-#define SHOW_SECONDS_OUTPUT      
-#ifdef SHOW_SECONDS_OUTPUT
-      if ((millis()-lastDebug)>=10000)
-      {
-        lastDebug = lastDebug + 10000;
-        Serial.print(bootMessage);
-        DebugOutputLedData();
-        Serial.printf("% d updates per second\r\n", updatesPerSec);
-      }
-#endif      
-      updatesPerSec = 0;
-    }
-  }
-}
-
-void DebugOutputLedData()
-{
-  Serial.print(" LED DATA: ");
-  for (int i=0;i<NUM_LEDS_TO_EMULATE*3;i++)
-  {
-    Serial.printf("%2x ", ledData[i]);
-  }
-  Serial.println();
-}
-
-void WS281xProcessor_ReceiveError()
-{
-  errorDetected = true;
-}
-
-void WS281xProcessor_DataReceived()
-{
-  dataAvailable = true;
 }
 
 void SendToMp3(uint8_t moduleIndex, uint8_t cmd, uint8_t param1, uint8_t param2) {
