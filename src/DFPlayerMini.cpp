@@ -1,16 +1,3 @@
-/*!
- * @file DFRobotDFPlayerMini.cpp
- * @brief DFPlayer - An Arduino Mini MP3 Player From DFRobot
- * @n Header file for DFRobot's DFPlayer
- *
- * @copyright	[DFRobot]( http://www.dfrobot.com ), 2016
- * @copyright	GNU Lesser General Public License
- *
- * @author [Angelo](Angelo.qiao@dfrobot.com)
- * @version  V1.0.3
- * @date  2016-12-07
- */
-
 #define MP3_DEBUG
 #include "DFPlayerMini.h"
 
@@ -79,6 +66,9 @@ void DFPlayerMini::uint16ToArray(uint16_t value, uint8_t *array){
 
 void DFPlayerMini::setModuleType(uint8_t moduleType) {
   _currentType = moduleType;
+#ifdef MP3_DEBUG
+  Serial.printf("Module type changed to: %d\n", _currentType);
+#endif
 }
 
 void DFPlayerMini::sendCmd(uint8_t command) {
@@ -148,10 +138,21 @@ void DFPlayerMini::sendJQ(uint8_t command) {
   _serial->write(_sendJQ, 4);
 }
 
+uint8_t DFPlayerMini::mapJQ6500Command(uint8_t command)
+{
+  if (command == DFPLAYER_PLAY_MP3)
+  {
+    // map to normal play command
+    command = DFPLAYER_PLAY_TRACK;
+  }
+  return command;
+}
+
 void DFPlayerMini::sendJQ(uint8_t command, uint8_t argument) {
   #ifdef MP3_DEBUG
     Serial.printf("JQ6500 cmd %d arg %d\n", command, argument);
   #endif
+  command = mapJQ6500Command(command);
   _sendJQ[1] = 3;
   _sendJQ[2] = command;
   _sendJQ[3] = argument;
@@ -163,6 +164,7 @@ void DFPlayerMini::sendJQ(uint8_t command, uint16_t argument) {
   #ifdef MP3_DEBUG
     Serial.printf("JQ6500 cmd %d larg %d\n", command, argument);
   #endif
+  command = mapJQ6500Command(command);
   _sendJQ[1] = 4;
   _sendJQ[2] = command;
   _sendJQ[3] = (uint8_t) (argument>>8);

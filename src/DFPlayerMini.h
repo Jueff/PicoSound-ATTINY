@@ -144,6 +144,8 @@ class DFPlayerMini {
   void sendJQ(uint8_t command, uint8_t argument);
   void sendJQ(uint8_t command, uint16_t argument);
 
+protected:
+  uint8_t mapJQ6500Command(uint8_t command);
 };
 
 #endif
