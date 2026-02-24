@@ -59,37 +59,33 @@ DFPlayerMini MP3[MAX_CHANNEL];
 
 #define HB_INPUT 0
 
-#define  Switchable_RGB_Heartbeat_Color(LED, InCh, MinBrightness, MaxBrightness, Color, Duration) \
-             New_HSV_Group()                                          \
-             APatternT1(LED,224,InCh,1,Color,Color,0,PM_HSV,0 ms,1)  \
-             APatternT1(LED, 194,InCh,1,MinBrightness,MaxBrightness,0,PM_HSV|PF_EASEINOUT,Duration,1)       
-
 #define PinA4 HB_INPUT+2
 #define MAX_BRIGHT 20
 MobaLedLib_Configuration()
 {
-  BlueLight1(0, C3, HB_INPUT + 2)
-  //Blink3(0, C_BLUE,                 HB_INPUT + 2, 0.5 Sek, 0.5 Sek, 5, MAX_BRIGHT, 0)
+  //BlueLight1(0, C3, HB_INPUT + 2)
+  Blink3(0, C_BLUE,                 HB_INPUT + 0, 0.5 Sek, 0.5 Sek, 5, MAX_BRIGHT, 0)
   Blink3(0, C_YELLOW,               HB_INPUT + 1, 0.5 Sek, 0.5 Sek, 5, MAX_BRIGHT, 0)
-  Blink3(0, C_RED,                  HB_INPUT + 0, 0.5 Sek, 0.5 Sek, 5, MAX_BRIGHT, 0)
-  Switchable_RGB_Heartbeat_Color(0, HB_INPUT + 3, 20, 70, 128, 1000)
-  BlueLight1(1, C3, HB_INPUT + 2)
-  Blink3(1, C_YELLOW, HB_INPUT + 1, 0.5 Sek, 0.5 Sek, 5, MAX_BRIGHT, 0)
-  Blink3(1, C_RED, HB_INPUT + 0, 0.5 Sek, 0.5 Sek, 5, MAX_BRIGHT, 0)
-  Switchable_RGB_Heartbeat_Color(1, HB_INPUT + 3, 20, 70, 128, 1000)
-    BlueLight1(2, C3, HB_INPUT + 2)
-    Blink3(2, C_YELLOW, HB_INPUT + 1, 0.5 Sek, 0.5 Sek, 5, MAX_BRIGHT, 0)
-    Blink3(2, C_RED, HB_INPUT + 0, 0.5 Sek, 0.5 Sek, 5, MAX_BRIGHT, 0)
-    Switchable_RGB_Heartbeat_Color(2, HB_INPUT + 3, 20, 70, 128, 1000)
+  Blink3(0, C_RED,                  HB_INPUT + 2, 0.5 Sek, 0.5 Sek, 5, MAX_BRIGHT, 0)
+  APatternT1(0, 193,                HB_INPUT + 3, 1, 5, MAX_BRIGHT, 0, PF_EASEINOUT, 1 Sec, 1)
 
-
+  //Switchable_RGB_Heartbeat_Color(0, HB_INPUT + 3, 20, 70, 170, 1000)
 
   EndCfg // End of the configuration
 };
 
 MobaLedLib_Create(leds); // Define the MobaLedLib instance
 
-void setSignal(LEDReceiver::Status signal)
+void turnInputsOff()
+{
+  for (int i = 0; i < 4; i++)
+  {
+    MobaLedLib.Set_Input(HB_INPUT + i, 0);
+  }
+  MobaLedLib.Update();
+}
+
+void setSignal(LEDReceiver::State signal)
 {
   /*
     Error       = 0,
@@ -102,21 +98,9 @@ void setSignal(LEDReceiver::Status signal)
   if (newSignal == lastSignal) return;
   lastSignal = newSignal;
   Serial.printf("Set signal %d\r\n", newSignal);
-  for (int i = 0; i < 4; i++)
-  {
-    MobaLedLib.Set_Input(HB_INPUT + i, 0);
-  }
-  MobaLedLib.Update();
+  turnInputsOff();
   MobaLedLib.Set_Input(HB_INPUT + newSignal, 1);
-  /*
-  switch (signal)
-  {
-    case LEDReceiver::Status::Online:      MobaLedLib.Set_Input(HB_INPUT, 1);  break;
-    case LEDReceiver::Status::Offline:     MobaLedLib.Set_Input(HB_INPUT + 1, 1); break;
-    case LEDReceiver::Status::DataMissing: MobaLedLib.Set_Input(HB_INPUT + 2, 1); break;
-    default:
-    case LEDReceiver::Status::Error:       MobaLedLib.Set_Input(HB_INPUT + 3, 1); break;
-  }*/
+
 }
 
 void setup()
@@ -146,7 +130,7 @@ void setup()
     FastLED.addLeds<NEOPIXEL, 16>(leds, NUM_LEDS); // Initialize the FastLED library
     FastLED.setDither(DISABLE_DITHER);       // avoid sending slightly modified brightness values
 
-    setSignal(LEDReceiver::Status::Offline);
+    turnInputsOff();
     Serial.println("Initialize core1");
     multicore_launch_core1(core1_entry);
 }
@@ -277,7 +261,7 @@ void loop()
 {
     pLEDReceiver->loop();
     dataChanged = pLEDReceiver->hasDataChanged();
-    setSignal(pLEDReceiver->getStatus());
+    setSignal(pLEDReceiver->getState());
     MobaLedLib.Update();
     FastLED.show();                       // Show the LEDs (send the leds[] array to the LED stripe)
 }
