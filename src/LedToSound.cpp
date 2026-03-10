@@ -2,7 +2,6 @@
 #include "LedToSound.h"
 #include <mutex>
 
-
 LedToSound::LedToSound(SoundModule* modules[NUM_MODULES])
 {
   for (uint8_t i = 0; i < NUM_MODULES; i++)
@@ -32,31 +31,34 @@ void LedToSound::handleCommand(uint8_t cmd, uint8_t param1, uint8_t param2)
   uint8_t nr;
   switch (cmd)
   {
-  case DFPLAYER_SET_ACTIVE_MODULE:
+  case PLAYER_SET_ACTIVE_MODULE:
     if ((param1 > 0) && (param1 <= NUM_MODULES)) {
       activeModule = param1 - 1;
+      Serial.printf("Set active module to %d\n", activeModule);
     }
     break;
-  case DFPLAYER_SET_MODULE_TYPE:
-    if ((param1 > 0) && (param2 > 0) && (param1 <= NUM_MODULES) && (param2 <= 2)) {
-      enqueueCommand(param1 - 1, DFPLAYER_SET_MODULE_TYPE, param2 - 1, 0);
+  case PLAYER_SET_MODULE_TYPE:
+    if ((param1 > 0) && (param2 > 0) && (param1 <= NUM_MODULES) && (param2 <= 2)) 
+    {
+      // to this in the main core, flashStorage won't work on core1
+      soundModules[param1-1]->setModuleType(param2-1);
     }
     break;
-  case DFPLAYER_PLAY_TRACK_ON:
-  case DFPLAYER_PLAY_MP3_ON:
+  case PLAYER_PLAY_TRACK_ON:
+  case PLAYER_PLAY_MP3_ON:
     nr = param1 >> 3;
     param1 = param1 & 0x7;
     if (nr < 1 || nr > NUM_MODULES) return;
     activeModule = nr - 1;
-    enqueueCommand(activeModule, DFPLAYER_PLAY_TRACK, param1, param2);
+    enqueueCommand(activeModule, PLAYER_PLAY_TRACK, param1, param2);
     break;
-  case DFPLAYER_PLAY_TRACK_REPEAT_ON:
+  case PLAYER_PLAY_TRACK_REPEAT_ON:
     nr = param1 >> 3;
     param1 = param1 & 0x7;
     if (nr < 1 || nr > NUM_MODULES) return;
     activeModule = nr - 1;
-    enqueueCommand(activeModule, DFPLAYER_PLAY_TRACK, param1, param2);
-    enqueueCommand(activeModule, DFPLAYER_SET_REPEAT_CURRENT, 1, 0);
+    enqueueCommand(activeModule, PLAYER_PLAY_TRACK, param1, param2);
+    enqueueCommand(activeModule, PLAYER_SET_REPEAT_CURRENT, 1, 0);
     break;
   case 0:
     // Do nothing

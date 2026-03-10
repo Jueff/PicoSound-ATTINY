@@ -1,7 +1,19 @@
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Juergen Winkler <MobaLedLib@gmx.at>
+ * SPDX-License-Identifier: CC-BY-NC-4.0
+ *
+ * Description:
+ *  This firmware runs on a Raspberry Pi Pico and control up to 6 sound modules
+ *  It is part of the MobaLedLib project. It receives LED data in groups of three byte values
+ *  parses the data and controls the JQ6500 or MP3-TF16P sound modules via serial line.
+ *  It provides visual feedback via the onboard RGB LED.
+ *  Sound module types are stored in flash memory. The solution supports
+ *  status indication using FastLED and MobaLedLib.
+*/
+
 #include "pico/multicore.h"
 #include "MobaLedLib.h"
-#include "SoundModule.h"
-#include "LedToSound.h"
+#include "PicoFlashStorage.h"
 
 // cool tool: https://godbolt.org/
 
@@ -19,32 +31,20 @@
 
 const uint NUM_LEDS_TO_EMULATE = 2;
 const uint NUM_LEDS_TO_SKIP = NUM_LEDS_TO_EMULATE-1;
-
-const char* bootMessage = "MobaLedLib Pico Sound V0.02";
+const char* bootMessage = "MobaLedLib Pico 6x Sound ATTiny V0.02";
 
 #include "LEDReceiver.h"
+#include "SoundModule.h"
+#include "LedToSound.h"
 
-#define MP3_DEBUG
-#define S_DEBUG
-
-bool on = true;
 bool dataChanged = false;
-CLEDController* pController0;
 LEDReceiver* pLEDReceiver;
 #define NUM_LEDS 20  
 CRGB leds[NUM_LEDS];           // Define the array of leds
 
-int updatesPerSec = 0;
-unsigned long lastSec = millis();
-unsigned long lastDebug = millis();
-
-bool isOnline = false;
 uint8_t lastSignal = 0xff;
 
-volatile bool dataAvailable = false;
-
 uint8_t ledData[NUM_LEDS_TO_EMULATE*3];
-uint8_t previousCommand[NUM_LEDS_TO_EMULATE];
 uint8_t activeModule[NUM_LEDS_TO_EMULATE];
 
 #define MAX_CHANNEL NUM_LEDS_TO_EMULATE*3
@@ -52,14 +52,13 @@ LedToSound* ledToSound[NUM_LEDS_TO_EMULATE];
 SoundModule* soundHandlers[MAX_CHANNEL];
 
 
-#ifndef PICO_DEFAULT_LED_PIN
-#define PICO_DEFAULT_LED_PIN 25
-#endif
-
+#define SECTORS_TO_USE 4
+using namespace PicoFlashStorage;
+FlashStorage* pStorage;
 #define HB_INPUT 0
-
-#define PinA4 HB_INPUT+2
+#define MAX_SIGNAL 4
 #define MAX_BRIGHT 20
+
 MobaLedLib_Configuration()
 {
   //BlueLight1(0, C3, HB_INPUT + 2)
@@ -67,6 +66,7 @@ MobaLedLib_Configuration()
   Blink3(0, C_YELLOW,               HB_INPUT + 1, 0.5 Sek, 0.5 Sek, 5, MAX_BRIGHT, 0)
   Blink3(0, C_RED,                  HB_INPUT + 2, 0.5 Sek, 0.5 Sek, 5, MAX_BRIGHT, 0)
   APatternT1(0, 193,                HB_INPUT + 3, 1, 5, MAX_BRIGHT, 0, PF_EASEINOUT, 1 Sec, 1)
+  PatternT4(0, _NStru(C1, 4, 1), HB_INPUT + 4, _Cx2LedCnt(C1), 0, 255, 0, 0, 24 ms, 74 ms, 24 ms, 512 ms, _Cx2P_DBLFL(C1))
 
   //Switchable_RGB_Heartbeat_Color(0, HB_INPUT + 3, 20, 70, 170, 1000)
 
@@ -77,10 +77,11 @@ MobaLedLib_Create(leds); // Define the MobaLedLib instance
 
 void turnInputsOff()
 {
-  for (int i = 0; i < 4; i++)
+  for (int i = 0; i <= MAX_SIGNAL; i++)
   {
     MobaLedLib.Set_Input(HB_INPUT + i, 0);
   }
+  lastSignal = -1;
   MobaLedLib.Update();
 }
 
@@ -90,64 +91,78 @@ void setSignal(LEDReceiver::State signal)
     Error       = 0,
     DataMissing = 1,
     Offline     = 2,
-    Online      = 3
+    Online      = 3,
+    FlashError  = 4,
   */
   uint8_t newSignal = (uint8_t)signal;
-  if (newSignal > 3) return;
+  if (newSignal > MAX_SIGNAL) return;
   if (newSignal == lastSignal) return;
+  turnInputsOff();
   lastSignal = newSignal;
   Serial.printf("Set signal %d\r\n", newSignal);
-  turnInputsOff();
   MobaLedLib.Set_Input(HB_INPUT + newSignal, 1);
-
 }
 
 void setup()
 {
-    Serial.begin(115200);
-    // only enable for debugging purpose to see trace output of boot code
-    while (!Serial) {} 
-    Serial.println(bootMessage);
+  Serial.begin(115200);
+  // only enable for debugging purpose to see trace output of boot code
+  // while (!Serial) {}
+  Serial.println(bootMessage);
 
-    for (int i=0;i<16;i++)
-    {
-      pinMode(i, INPUT);
-    }
-    gpio_init(PICO_DEFAULT_LED_PIN);
-    gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
 
-    memset(previousCommand, sizeof(previousCommand), 0);
-    for (uint8_t i=0; i<NUM_LEDS_TO_EMULATE; i++)
-    {
-      activeModule[i] = i*3;
-    }
-    Serial.println("Initialize LED Receiver");
-    pLEDReceiver = new LEDReceiver(&ledData[0], NUM_LEDS_TO_EMULATE, NUM_LEDS_TO_SKIP, DATA_IN_PIN, DATA_OUT_PIN);
-    Serial.println("Initialize FastLED"); 
+  for (int i = 0; i < 30; i++)
+  {
+    pinMode(i, INPUT);
+  }
+
+  Serial.println("Initialize LED Receiver");
+  pLEDReceiver = new LEDReceiver(&ledData[0], NUM_LEDS_TO_EMULATE, NUM_LEDS_TO_SKIP, DATA_IN_PIN, DATA_OUT_PIN);
+
+  Serial.println("Initialize FastLED"); 
           
-    FastLED.addLeds<NEOPIXEL, STATUSLED_PIN>(leds, NUM_LEDS); // Initialize the FastLED library
-    FastLED.addLeds<NEOPIXEL, 16>(leds, NUM_LEDS); // Initialize the FastLED library
-    FastLED.setDither(DISABLE_DITHER);       // avoid sending slightly modified brightness values
+  FastLED.addLeds<NEOPIXEL, STATUSLED_PIN>(leds, NUM_LEDS); // Initialize the FastLED library
+  FastLED.addLeds<NEOPIXEL, 16>(leds, NUM_LEDS); // Initialize the FastLED library
+  FastLED.setDither(DISABLE_DITHER);       // avoid sending slightly modified brightness values
 
-    turnInputsOff();
+  turnInputsOff();
 
-    Serial.println("Initialize sound handlers");
-    for (uint8_t i = 0; i < MAX_CHANNEL; i++) {
-      soundHandlers[i] = new SoundModule(i);
-    }
+  Serial.println("Initialize sound handlers");
+  setupSoundModules();
 
-    for (uint8_t i = 0; i < NUM_LEDS_TO_EMULATE; i++)
-    {
-      ledToSound[i] = new LedToSound(&soundHandlers[i * 3]);
-    }
-
-    Serial.println("Initialize core1");
-    multicore_launch_core1(core1_entry);
+  Serial.println("Initialize core1");
+  multicore_launch_core1(core1_entry);
 }
 
+void setupSoundModules()
+{
+  uint16_t baseSectorNumber = (PICO_FLASH_SIZE_BYTES / FLASH_SECTOR_SIZE) - SECTORS_TO_USE;
+  pStorage = new FlashStorage(baseSectorNumber, SECTORS_TO_USE, (uint8_t*)"MLLSRS10");
+
+  if (!pStorage->isValid())
+  {
+    ShowCriticalError("can't use flash storage");
+  }
+  SoundModule::init(pStorage);
+
+  for (uint8_t i=0; i<NUM_LEDS_TO_EMULATE; i++)
+  {
+    activeModule[i] = i*3;
+  }
+    
+  for (uint8_t i = 0; i < MAX_CHANNEL; i++) {
+    soundHandlers[i] = new SoundModule(i);
+  }
+
+  for (uint8_t i = 0; i < NUM_LEDS_TO_EMULATE; i++)
+  {
+    ledToSound[i] = new LedToSound(&soundHandlers[i * 3]);
+  }
+}
 
 void core1_entry() 
 {
+  // process the data queue of the sound handlers in an infinite loop, so that the main loop is not blocked by waiting for the sound module to be ready
   while(true)
   {
     for (int ledIndex = 0; ledIndex < NUM_LEDS_TO_EMULATE; ledIndex++)
@@ -171,4 +186,20 @@ void loop()
     setSignal(pLEDReceiver->getState());
     MobaLedLib.Update();
     FastLED.show();                       // Show the LEDs (send the leds[] array to the LED stripe)
+}
+
+void ShowCriticalError(const char* message)
+{
+  auto lastTick = millis();
+  do
+  {
+    if ((millis() - lastTick) > 1000)
+    {
+      lastTick = millis();
+      Serial.println(message);
+    }
+    MobaLedLib.Update();
+    FastLED.show(); // Show the LEDs (send the leds[] array to the LED stripe)
+    delay(10);
+  } while (true);
 }
