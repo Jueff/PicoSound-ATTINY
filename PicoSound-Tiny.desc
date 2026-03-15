@@ -1,0 +1,17 @@
+{
+  "name": "PicoSound-Tiny",
+  "version": "{APP_VERSION}",
+  "license": "BSL-1.1-or-later",
+  "DE": {
+    "short": "ATTiny kompatibles 6-fach Soundmodul",
+    "detail": "Steuert bis zu sechs Soundmodule mit einer PicoSoundServo 512 Platine. Das Protokoll ist kompatibel zur ATTiny Version."
+  },
+  "EN": {
+    "short": "ATTiny-compatible 6-channel sound module",
+    "detail": "Controls up to six sound modules with a PicoSoundServo 512 board. The protocol is compatible with the ATTiny version."
+  },
+  "NL": {
+    "short": "ATTiny-compatibele 6-voudige geluidsmodule",
+    "detail": "Bestuurt maximaal zes geluidsmodules met een PicoSoundServo 512-kaart. Het protocol is compatibel met de ATTiny-versie."
+  }
+}

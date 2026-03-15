@@ -1,1 +1,1 @@
-pio run -t upload -e picoSoundTiny --upload-port COM3
+pio run -t upload -e PicoSound-Tiny --upload-port COM3
