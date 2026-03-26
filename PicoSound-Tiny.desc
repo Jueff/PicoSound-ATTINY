@@ -2,6 +2,7 @@
   "name": "PicoSound-Tiny",
   "version": "{APP_VERSION}",
   "license": "BSL-1.1-or-later",
+  "platform": "MLL512V1",
   "DE": {
     "short": "ATTiny kompatibles 6-fach Soundmodul",
     "detail": "Steuert bis zu sechs Soundmodule mit einer PicoSoundServo 512 Platine. Das Protokoll ist kompatibel zur ATTiny Version."
