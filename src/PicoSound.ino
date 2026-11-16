@@ -62,15 +62,18 @@ uint8_t logState = 0;
 #define MLLAPP_LOG(level,...) if (LogLevel>=level) Serial.printf(__VA_ARGS__);
 
 // flash storage
-#define SECTORS_TO_USE 4
+#define SECTORS_TO_USE 8
 using namespace PicoFlashStorage;
 FlashStorage* pStorage;
 
 // Status signal members and defines
 uint8_t lastSignal = 0xff;
 const uint8_t HB_INPUT = 0;
-const uint8_t MAX_SIGNAL = 4;
+const uint8_t MAX_SIGNAL = 5;
+const uint8_t STARTUP_SIGNAL = 5;
+const uint32_t STARTUP_SIGNAL_DURATION = 2400;  // [ms]
 const uint8_t MAX_BRIGHT = 20;
+uint32_t startupSignalStart = 0;
 
 // MobaLedLib
 CRGB leds[NUM_LEDS];
@@ -83,6 +86,7 @@ MobaLedLib_Configuration()
   // APatternT1(0, 193, HB_INPUT + 3, 1, 5, MAX_BRIGHT, 0, PF_EASEINOUT, 1 Sec, 1)  // green fading
   ConstRGB(0, HB_INPUT + 3, 0, 0, 0, 0, 0, 0)                                       // led off
   PatternT4(0, _NStru(C1, 4, 1), HB_INPUT + 4, _Cx2LedCnt(C1), 0, 255, 0, 0, 24 ms, 74 ms, 24 ms, 512 ms, _Cx2P_DBLFL(C1))  // red warning flashlight
+    PatternT2(0, 64, HB_INPUT + 5, 3, 0, MAX_BRIGHT, 0, PM_NORMAL, 400, 100, 66, 32, 0, 0) // blink green red green
   EndCfg // End of the configuration
 };
 MobaLedLib_Create(leds); // Define the MobaLedLib instance
@@ -105,6 +109,7 @@ void setSignal(LEDReceiver::State signal)
     Offline     = 2,
     Online      = 3,
     FlashError  = 4,
+    Startup     = 5
   */
   uint8_t newSignal = (uint8_t)signal;
   if (newSignal > MAX_SIGNAL) return;
@@ -150,8 +155,10 @@ void setup()
 
   MLLAPP_LOG(1, bootMessage);
 
+  turnInputsOff();
   MLLAPP_LOG(3, "Initialize LED Receiver");
   pLEDReceiver = new LEDReceiver(&ledData[0], NUM_LEDS_TO_EMULATE, NUM_LEDS_TO_SKIP, DATA_IN_PIN, DATA_OUT_PIN);
+  pLEDReceiver->setRepeaterLEDColor(0, 0, 0);
 
   MLLAPP_LOG(3, "Initialize FastLED");
 
@@ -178,6 +185,9 @@ void setup()
   ButtonConfig* buttonConfig = ButtonConfig::getSystemButtonConfig();
   buttonConfig->setEventHandler(handleButton);
   buttonConfig->setFeature(ButtonConfig::kFeatureLongPress);
+  MLLAPP_LOG(3, "Show startup signal\n");
+  setSignal((LEDReceiver::State)STARTUP_SIGNAL);
+  startupSignalStart = millis() + STARTUP_SIGNAL_DURATION;
 }
 
 void setupSoundModules(FlashStorage* pStorage, uint8_t basePin)
@@ -212,7 +222,19 @@ void loop()
   pLEDReceiver->loop();
 
   updateSound(0);
-  setSignal(pLEDReceiver->getState());
+  if (startupSignalStart > 0)
+  {
+    if (millis() > startupSignalStart)
+    {
+      startupSignalStart = 0;
+      turnInputsOff();
+      MLLAPP_LOG(3, "Startup signal finished\n");
+    }
+  }
+  else
+  {
+    setSignal(pLEDReceiver->getState());
+  }
   MobaLedLib.Update();
   FastLED.show();                       // Show the LEDs (send the leds[] array to the LED stripe)
   button.check();
