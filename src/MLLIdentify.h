@@ -1,4 +1,5 @@
 // MLLIdentify.h
+// Version 1.01 (2026-11-26): MllIdentStart verlaengert den Timeout bei jedem Kommando (vorher endete das Blinken nach MLL_IDENT_TIMEOUT kurz)
 // Version 1.00 (2026-11-22): Initial release
 // Author: Juergen Winkler
 
@@ -16,8 +17,7 @@ static unsigned long mllIdentLastCmd = 0;
 static void MllIdentStart()
 //-----------------------------------------
 {
-  if (mllIdentActive) return;
-  mllIdentLastCmd = millis();
+  mllIdentLastCmd = millis();   // jedes Kommando verlaengert, sonst endet das Blinken nach MLL_IDENT_TIMEOUT trotz laufender Kommandos
   mllIdentActive = true;
 }
 
