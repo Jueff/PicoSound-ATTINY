@@ -45,6 +45,10 @@ const char* bootMessage = "MobaLedLib Pico 6x Sound ATTiny V" STRINGIFY(APP_VERS
 #include "SoundModule.h"
 #include "LedToSound.h"
 
+// Identity feature and firmware info (~MLLIDENT, ~MLLINFO)
+#define MLL_FW_TYPE "PICOSOUND"
+#include "MLLAdminCommunication.h"
+
 // LED receiver members
 LEDReceiver* pLEDReceiver;
 
@@ -67,12 +71,22 @@ using namespace PicoFlashStorage;
 FlashStorage* pStorage;
 
 // Status signal members and defines
-uint8_t lastSignal = 0xff;
+enum Signal : uint8_t {
+  SIG_ERROR = 0,
+  SIG_DATA_MISSING = 1,
+  SIG_OFFLINE = 2,
+  SIG_ONLINE = 3,
+  SIG_FLASH_ERROR = 4,
+  SIG_STARTUP = 5,
+  SIG_IDENTITY = 6,
+  SIG_MAX = SIG_IDENTITY
+};
+
 const uint8_t HB_INPUT = 0;
-const uint8_t MAX_SIGNAL = 5;
-const uint8_t STARTUP_SIGNAL = 5;
 const uint32_t STARTUP_SIGNAL_DURATION = 2400;  // [ms]
 const uint8_t MAX_BRIGHT = 20;
+Signal lastSignal = (Signal)0xFF;
+CHSV HSV;
 uint32_t startupSignalStart = 0;
 
 // MobaLedLib
@@ -87,47 +101,41 @@ MobaLedLib_Configuration()
   ConstRGB(0, HB_INPUT + 3, 0, 0, 0, 0, 0, 0)                                       // led off
   PatternT4(0, _NStru(C1, 4, 1), HB_INPUT + 4, _Cx2LedCnt(C1), 0, 255, 0, 0, 24 ms, 74 ms, 24 ms, 512 ms, _Cx2P_DBLFL(C1))  // red warning flashlight
     PatternT2(0, 64, HB_INPUT + 5, 3, 0, MAX_BRIGHT, 0, PM_NORMAL, 400, 100, 66, 32, 0, 0) // blink green red green
+    PatternT1(0,224,HB_INPUT + 6,3,0,MAX_BRIGHT,0,PM_NORMAL,500,59,1)                      // blink yellow white blue for identity mode
   EndCfg // End of the configuration
 };
 MobaLedLib_Create(leds); // Define the MobaLedLib instance
 
 void turnInputsOff()
 {
-  for (int i = 0; i <= MAX_SIGNAL; i++)
+  for (uint8_t i = 0; i <= (uint8_t)SIG_MAX; i++)
   {
     MobaLedLib.Set_Input(HB_INPUT + i, 0);
   }
-  lastSignal = 0xff;
+  lastSignal = (Signal)0xFF;
   MobaLedLib.Update();
 }
 
-void setSignal(LEDReceiver::State signal)
+void setSignal(Signal signal)
 {
-  /*
-    Error       = 0,
-    DataMissing = 1,
-    Offline     = 2,
-    Online      = 3,
-    FlashError  = 4,
-    Startup     = 5
-  */
-  uint8_t newSignal = (uint8_t)signal;
-  if (newSignal > MAX_SIGNAL) return;
+  Signal newSignal = signal;
+  if ((uint8_t)newSignal > (uint8_t)SIG_MAX) return;
   if (newSignal == lastSignal) return;
   turnInputsOff();
   lastSignal = newSignal;
-  MLLAPP_LOG(3, "Set signal %d\r\n", newSignal);
-  MobaLedLib.Set_Input(HB_INPUT + newSignal, 1);
+  MLLAPP_LOG(3, "Set signal %d\r\n", (uint8_t)newSignal);
+  MobaLedLib.Set_Input(HB_INPUT + (uint8_t)newSignal, 1);
 }
 
 void setup()
 {
-  Serial.begin(115200);
   for (int i = 0; i < 30; i++)
   {
     pinMode(i, INPUT);
   }
   pinMode(DEBUG_PIN, INPUT_PULLUP);
+
+  Serial.begin(115200);
 
   // check if debug button is pressed during startup, if yes, wait 3 seconds for usb serial is connected and enable all logs
   if (digitalRead(DEBUG_PIN) == LOW)
@@ -140,6 +148,7 @@ void setup()
       if (Serial) break;
       delay(10);
     }
+    Serial.println(bootMessage);
     MLLSoundTiny::LogLevel = 8;
     FlashStorage::LogLevel = 8;
     LogLevel = 8;
@@ -152,15 +161,15 @@ void setup()
     FlashStorage::LogLevel = 0;
     LogLevel = 0;
   }
-
-  MLLAPP_LOG(1, bootMessage);
+  MLLAPP_LOG(1, "%s\n", bootMessage);
 
   turnInputsOff();
-  MLLAPP_LOG(3, "Initialize LED Receiver");
+
+  MLLAPP_LOG(3, "Initialize LED Receiver\n");
   pLEDReceiver = new LEDReceiver(&ledData[0], NUM_LEDS_TO_EMULATE, NUM_LEDS_TO_SKIP, DATA_IN_PIN, DATA_OUT_PIN);
   pLEDReceiver->setRepeaterLEDColor(0, 0, 0);
 
-  MLLAPP_LOG(3, "Initialize FastLED");
+  MLLAPP_LOG(3, "Initialize FastLED\n");
 
   FastLED.addLeds<NEOPIXEL, STATUSLED_PIN>(leds, NUM_LEDS); // Initialize the FastLED library
   FastLED.addLeds<NEOPIXEL, 16>(leds, NUM_LEDS); // Initialize the FastLED library
@@ -186,8 +195,10 @@ void setup()
   buttonConfig->setEventHandler(handleButton);
   buttonConfig->setFeature(ButtonConfig::kFeatureLongPress);
   MLLAPP_LOG(3, "Show startup signal\n");
-  setSignal((LEDReceiver::State)STARTUP_SIGNAL);
+  setSignal(SIG_STARTUP);
   startupSignalStart = millis() + STARTUP_SIGNAL_DURATION;
+
+  MLLAPP_LOG(3, "Identity feature initialized\n");
 }
 
 void setupSoundModules(FlashStorage* pStorage, uint8_t basePin)
@@ -219,6 +230,16 @@ void core1_entry()
 
 void loop()
 {
+  // Handle serial commands for Identity feature
+  while (Serial.available())
+  {
+    char c = Serial.read();
+    MllAdminReceive(c);
+  }
+
+  // Update Identity blinking
+  MllIdentUpdate();
+
   pLEDReceiver->loop();
 
   updateSound(0);
@@ -233,7 +254,14 @@ void loop()
   }
   else
   {
-    setSignal(pLEDReceiver->getState());
+    if (!mllIdentActive)
+    {
+      setSignal((Signal)pLEDReceiver->getState());
+    }
+    else
+    {
+      setSignal(SIG_IDENTITY);  // Identity signal
+    }
   }
   MobaLedLib.Update();
   FastLED.show();                       // Show the LEDs (send the leds[] array to the LED stripe)
